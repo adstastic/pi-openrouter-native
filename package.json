@@ -10,6 +10,14 @@
     "openrouter",
     "extension"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adstastic/pi-openrouter-native.git"
+  },
+  "homepage": "https://github.com/adstastic/pi-openrouter-native#readme",
+  "bugs": {
+    "url": "https://github.com/adstastic/pi-openrouter-native/issues"
+  },
   "files": [
     "extensions",
     "README.md",

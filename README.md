@@ -4,13 +4,19 @@ Live OpenRouter model sync for Pi using native `pi.registerProvider("openrouter"
 
 ## Install
 
-From this checkout:
+Try from this checkout:
 
 ```bash
 pi -e .
 ```
 
-After publish:
+Install from GitHub:
+
+```bash
+pi install git:github.com/adstastic/pi-openrouter-native
+```
+
+After npm publish:
 
 ```bash
 pi install npm:pi-openrouter-native

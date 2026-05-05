@@ -101,7 +101,7 @@ async function loadModels(force: boolean, apiKey: string | undefined): Promise<S
 async function fetchOpenRouterModels(apiKey: string | undefined): Promise<ProviderModelConfig[]> {
   const headers: Record<string, string> = {
     accept: "application/json",
-    "HTTP-Referer": "https://github.com/adi/pi-openrouter-native",
+    "HTTP-Referer": "https://github.com/adstastic/pi-openrouter-native",
     "X-OpenRouter-Title": "pi-openrouter-native",
   };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
