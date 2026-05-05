@@ -26,19 +26,19 @@ interface SyncResult {
   message: string;
 }
 
-let current: ProviderModelConfig[] | undefined;
 let lastGood: ProviderModelConfig[] | undefined;
 let fetchedAt = 0;
 let registeredCount = 0;
 let lastSync = { ok: false, at: 0, message: "never" };
+let inFlight: Promise<SyncResult> | undefined;
 
 export default async function openRouterNative(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
-    current = undefined;
     lastGood = undefined;
     fetchedAt = 0;
     registeredCount = 0;
     lastSync = { ok: false, at: 0, message: "never" };
+    inFlight = undefined;
   });
 
   pi.registerCommand("openrouter-sync", {
@@ -62,18 +62,28 @@ export default async function openRouterNative(pi: ExtensionAPI) {
 }
 
 async function syncModels(pi: ExtensionAPI, ctx?: ExtensionCommandContext): Promise<SyncResult> {
+  // Dedupe overlapping syncs (e.g. user spams /openrouter-sync) so a slow first
+  // request can't stomp module state set by a faster second one.
+  if (inFlight) return inFlight;
+  inFlight = runSync(pi, ctx).finally(() => {
+    inFlight = undefined;
+  });
+  return inFlight;
+}
+
+async function runSync(pi: ExtensionAPI, ctx: ExtensionCommandContext | undefined): Promise<SyncResult> {
   const apiKey = await resolveApiKey(ctx);
 
   try {
     const models = await fetchOpenRouterModels(apiKey);
-    current = lastGood = models;
+    lastGood = models;
     fetchedAt = Date.now();
     pi.registerProvider("openrouter", buildProviderConfig(models));
     registeredCount = models.length;
     lastSync = { ok: true, at: Date.now(), message: `OpenRouter synced: ${models.length} models` };
     return lastSync;
   } catch (error) {
-    const message = describeFetchError(error, apiKey);
+    const message = describeFetchError(error);
     if (lastGood && lastGood.length > 0) {
       pi.registerProvider("openrouter", buildProviderConfig(lastGood));
       registeredCount = lastGood.length;
@@ -83,7 +93,7 @@ async function syncModels(pi: ExtensionAPI, ctx?: ExtensionCommandContext): Prom
         message: `OpenRouter sync failed: ${message} — using last good (${lastGood.length} models)`,
       };
     } else {
-      // No models at all — register empty provider so /openrouter-status is useful
+      // Register empty provider so /openrouter-status still has something to report.
       pi.registerProvider("openrouter", buildProviderConfig([]));
       registeredCount = 0;
       lastSync = {
@@ -215,7 +225,9 @@ function hasReasoning(model: OpenRouterModel): boolean {
   }
   const text = `${stringValue(model.id) ?? ""} ${stringValue(model.name) ?? ""}`.toLowerCase();
   return (
-    /(^|[\s/:_-])(r1|qwq|qwen3|deepresearch|reasoning|thinking)([\s/:_-]|$)/.test(text) ||
+    // 'qwen3' deliberately excluded: the family ships both reasoning and non-reasoning
+    // variants, so name alone is ambiguous — rely on supported_parameters above.
+    /(^|[\s/:_-])(r1|qwq|deepresearch|reasoning|thinking)([\s/:_-]|$)/.test(text) ||
     /\b(o1|o3|o4|gpt-5)\b/.test(text)
   );
 }
@@ -239,12 +251,11 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function describeFetchError(error: unknown, apiKey: string | undefined): string {
+function describeFetchError(error: unknown): string {
   if (error instanceof Error && error.name === "TimeoutError") {
     return `fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s — OpenRouter may be down or slow. Try /openrouter-sync again.`;
   }
   if (error instanceof Error) {
-    // Errors from createHttpError already have full context
     return error.message;
   }
   return String(error);

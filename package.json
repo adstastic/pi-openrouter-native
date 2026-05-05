@@ -23,8 +23,12 @@
     "README.md",
     "LICENSE"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test extensions/openrouter-native/index.test.ts"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
@@ -33,6 +37,7 @@
   "devDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
+    "tsx": "^4.19.0",
     "typescript": "^5.9.0"
   },
   "pi": {
