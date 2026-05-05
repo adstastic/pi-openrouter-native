@@ -1,6 +1,6 @@
 # pi-openrouter-native
 
-Live OpenRouter model sync for Pi using native `pi.registerProvider("openrouter", ...)`.
+OpenRouter model sync for Pi using native `pi.registerProvider("openrouter", ...)`.
 
 ## Install
 

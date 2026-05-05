@@ -1,7 +1,7 @@
 {
   "name": "pi-openrouter-native",
   "version": "0.1.0",
-  "description": "Native OpenRouter live model sync for pi using built-in provider routing support",
+  "description": "Native OpenRouter model sync for pi using built-in provider routing support",
   "license": "MIT",
   "type": "module",
   "keywords": [
