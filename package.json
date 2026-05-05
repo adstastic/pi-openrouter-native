@@ -1,0 +1,38 @@
+{
+  "name": "pi-openrouter-native",
+  "version": "0.1.0",
+  "description": "Native OpenRouter live model sync for pi using built-in provider routing support",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "openrouter",
+    "extension"
+  ],
+  "files": [
+    "extensions",
+    "README.md",
+    "PLAN.md",
+    "LICENSE",
+    "package.json",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "typescript": "^5.9.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/openrouter-native/index.ts"
+    ]
+  }
+}
