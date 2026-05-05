@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   AuthStatus,
   ExtensionAPI,
@@ -10,7 +9,6 @@ import type {
 const BASE_URL = "https://openrouter.ai/api/v1";
 const MODELS_URL = `${BASE_URL}/models`;
 const FETCH_TIMEOUT_MS = 15_000;
-const CACHE_TTL_MS = 30 * 60_000;
 
 interface OpenRouterModel {
   id?: unknown;
@@ -23,29 +21,32 @@ interface OpenRouterModel {
   per_request_limits?: { completion_tokens?: unknown } | null;
 }
 
-interface CacheEntry {
-  key: string;
-  fetchedAt: number;
-  models: ProviderModelConfig[];
-}
-
 interface SyncResult {
   ok: boolean;
   message: string;
-  models: ProviderModelConfig[];
 }
 
-let cache: CacheEntry | undefined;
-let lastGood: CacheEntry | undefined;
+let current: ProviderModelConfig[] | undefined;
+let lastGood: ProviderModelConfig[] | undefined;
+let fetchedAt = 0;
 let registeredCount = 0;
 let lastSync = { ok: false, at: 0, message: "never" };
 
 export default async function openRouterNative(pi: ExtensionAPI) {
+  pi.on("session_shutdown", () => {
+    current = undefined;
+    lastGood = undefined;
+    fetchedAt = 0;
+    registeredCount = 0;
+    lastSync = { ok: false, at: 0, message: "never" };
+  });
+
   pi.registerCommand("openrouter-sync", {
     description: "Refresh OpenRouter model list",
     handler: async (_args, ctx) => {
-      const result = await syncOpenRouter(pi, true, ctx);
-      ctx.ui.notify(result.message, result.ok ? "info" : result.models.length ? "warning" : "error");
+      const result = await syncModels(pi, ctx);
+      const models = lastGood?.length ?? 0;
+      ctx.ui.notify(result.message, result.ok ? "info" : models > 0 ? "warning" : "error");
     },
   });
 
@@ -57,44 +58,41 @@ export default async function openRouterNative(pi: ExtensionAPI) {
     },
   });
 
-  await syncOpenRouter(pi, false);
+  await syncModels(pi);
 }
 
-async function syncOpenRouter(
-  pi: ExtensionAPI,
-  force: boolean,
-  ctx?: ExtensionCommandContext,
-): Promise<SyncResult> {
+async function syncModels(pi: ExtensionAPI, ctx?: ExtensionCommandContext): Promise<SyncResult> {
   const apiKey = await resolveApiKey(ctx);
-  const result = await loadModels(force, apiKey);
-  if (result.models.length > 0) {
-    pi.registerProvider("openrouter", buildProviderConfig(result.models));
-    registeredCount = result.models.length;
-  }
-  lastSync = { ok: result.ok, at: Date.now(), message: result.message };
-  return result;
-}
-
-async function loadModels(force: boolean, apiKey: string | undefined): Promise<SyncResult> {
-  const key = cacheKey(apiKey);
-  if (!force && cache?.key === key && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
-    return { ok: true, message: `OpenRouter cache fresh: ${cache.models.length} models`, models: cache.models };
-  }
 
   try {
     const models = await fetchOpenRouterModels(apiKey);
-    cache = lastGood = { key, fetchedAt: Date.now(), models };
-    return { ok: true, message: `OpenRouter synced: ${models.length} models`, models };
+    current = lastGood = models;
+    fetchedAt = Date.now();
+    pi.registerProvider("openrouter", buildProviderConfig(models));
+    registeredCount = models.length;
+    lastSync = { ok: true, at: Date.now(), message: `OpenRouter synced: ${models.length} models` };
+    return lastSync;
   } catch (error) {
-    const message = errorMessage(error);
-    if (lastGood?.key === key) {
-      return {
+    const message = describeFetchError(error, apiKey);
+    if (lastGood && lastGood.length > 0) {
+      pi.registerProvider("openrouter", buildProviderConfig(lastGood));
+      registeredCount = lastGood.length;
+      lastSync = {
         ok: false,
-        message: `OpenRouter sync failed: ${message}; using last good (${lastGood.models.length} models)`,
-        models: lastGood.models,
+        at: Date.now(),
+        message: `OpenRouter sync failed: ${message} — using last good (${lastGood.length} models)`,
+      };
+    } else {
+      // No models at all — register empty provider so /openrouter-status is useful
+      pi.registerProvider("openrouter", buildProviderConfig([]));
+      registeredCount = 0;
+      lastSync = {
+        ok: false,
+        at: Date.now(),
+        message: `OpenRouter sync failed: ${message}. No models available — run /openrouter-sync to retry.`,
       };
     }
-    return { ok: false, message: `OpenRouter sync failed: ${message}`, models: [] };
+    return lastSync;
   }
 }
 
@@ -107,7 +105,9 @@ async function fetchOpenRouterModels(apiKey: string | undefined): Promise<Provid
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   const response = await fetch(MODELS_URL, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`/models ${response.status} ${response.statusText}`);
+  if (!response.ok) {
+    throw createHttpError(response, apiKey);
+  }
 
   const payload = (await response.json()) as { data?: unknown };
   const models = (Array.isArray(payload.data) ? payload.data : [])
@@ -115,6 +115,50 @@ async function fetchOpenRouterModels(apiKey: string | undefined): Promise<Provid
     .filter((model): model is ProviderModelConfig => model !== undefined);
   if (models.length === 0) throw new Error("/models returned no usable models");
   return models;
+}
+
+function createHttpError(response: Response, apiKey: string | undefined): Error {
+  const status = response.status;
+  const base = `/models returned ${status} ${response.statusText}`;
+
+  if (status === 401) {
+    if (!apiKey) {
+      return new Error(
+        `${base} — no API key found. Set OPENROUTER_API_KEY env var or run /login openrouter. ` +
+          `Note: /models is public and works without a key, so a 401 usually means a key was sent but is invalid or misspelled (check env var name).`,
+      );
+    }
+    return new Error(
+      `${base} — the API key was rejected. Check that OPENROUTER_API_KEY is correct (typo'd env var name? extra whitespace? key revoked?). ` +
+        `Try: unset the key and re-sync to use the public endpoint, or generate a new key at https://openrouter.ai/settings/keys`,
+    );
+  }
+
+  if (status === 402) {
+    return new Error(
+      `${base} — OpenRouter account has insufficient credits. Top up at https://openrouter.ai/settings/credits`,
+    );
+  }
+
+  if (status === 403) {
+    return new Error(
+      `${base} — access denied. Your API key may not have permission for this endpoint, or your account may be restricted.`,
+    );
+  }
+
+  if (status === 429) {
+    return new Error(
+      `${base} — rate limited. Wait a moment and try /openrouter-sync again.`,
+    );
+  }
+
+  if (status >= 500) {
+    return new Error(
+      `${base} — OpenRouter server error. This is on their end. Try /openrouter-sync again in a minute.`,
+    );
+  }
+
+  return new Error(base);
 }
 
 export function toPiModel(model: OpenRouterModel): ProviderModelConfig | undefined {
@@ -151,13 +195,17 @@ function buildProviderConfig(models: ProviderModelConfig[]): ProviderConfig {
 }
 
 async function resolveApiKey(ctx: ExtensionCommandContext | undefined): Promise<string | undefined> {
-  const apiKey = ctx ? await ctx.modelRegistry.getApiKeyForProvider("openrouter").catch(() => undefined) : undefined;
-  const resolved = apiKey ?? process.env.OPENROUTER_API_KEY;
+  let piApiKey: string | undefined;
+  if (ctx) {
+    try {
+      piApiKey = await ctx.modelRegistry.getApiKeyForProvider("openrouter");
+    } catch (error) {
+      // Key lookup failed (not configured, provider unknown, etc.) — fall through to env
+      piApiKey = undefined;
+    }
+  }
+  const resolved = piApiKey ?? process.env.OPENROUTER_API_KEY;
   return resolved && resolved !== "OPENROUTER_API_KEY" ? resolved : undefined;
-}
-
-function cacheKey(apiKey: string | undefined): string {
-  return apiKey ? createHash("sha256").update(apiKey).digest("hex") : "no-key";
 }
 
 function hasReasoning(model: OpenRouterModel): boolean {
@@ -166,7 +214,10 @@ function hasReasoning(model: OpenRouterModel): boolean {
     return true;
   }
   const text = `${stringValue(model.id) ?? ""} ${stringValue(model.name) ?? ""}`.toLowerCase();
-  return /(^|[\s/:_-])(r1|qwq|qwen3|deepresearch|reasoning|thinking)([\s/:_-]|$)/.test(text) || /\b(o1|o3|o4|gpt-5)\b/.test(text);
+  return (
+    /(^|[\s/:_-])(r1|qwq|qwen3|deepresearch|reasoning|thinking)([\s/:_-]|$)/.test(text) ||
+    /\b(o1|o3|o4|gpt-5)\b/.test(text)
+  );
 }
 
 function hasImageInput(model: OpenRouterModel): boolean {
@@ -188,21 +239,26 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.name === "TimeoutError"
-    ? "fetch timed out after 15s"
-    : error instanceof Error
-      ? error.message
-      : String(error);
+function describeFetchError(error: unknown, apiKey: string | undefined): string {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return `fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s — OpenRouter may be down or slow. Try /openrouter-sync again.`;
+  }
+  if (error instanceof Error) {
+    // Errors from createHttpError already have full context
+    return error.message;
+  }
+  return String(error);
 }
 
 function statusText(auth: AuthStatus): string {
   return [
     `OpenRouter models: ${registeredCount}`,
-    `cache age: ${lastGood ? formatAge(Date.now() - lastGood.fetchedAt) : "none"}`,
+    `last fetched: ${fetchedAt ? formatAge(Date.now() - fetchedAt) + " ago" : "never"}`,
     `last sync: ${lastSync.message}${lastSync.at ? ` (${formatAge(Date.now() - lastSync.at)} ago)` : ""}`,
     `auth: ${authStatus(auth)}`,
-    ...(isAuthMissing(auth) ? ["warning: picker still lists models; requests need OPENROUTER_API_KEY or stored OpenRouter auth"] : []),
+    ...(isAuthMissing(auth)
+      ? ["⚠ requests need OPENROUTER_API_KEY or stored OpenRouter auth (run /login openrouter)"]
+      : []),
   ].join("\n");
 }
 
@@ -220,5 +276,7 @@ function formatAge(ms: number): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }

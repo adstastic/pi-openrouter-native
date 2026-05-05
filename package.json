@@ -21,10 +21,7 @@
   "files": [
     "extensions",
     "README.md",
-    "PLAN.md",
-    "LICENSE",
-    "package.json",
-    "tsconfig.json"
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"
