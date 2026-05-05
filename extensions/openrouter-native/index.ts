@@ -52,7 +52,8 @@ export default async function openRouterNative(pi: ExtensionAPI) {
   pi.registerCommand("openrouter-status", {
     description: "Show OpenRouter model sync status",
     handler: async (_args, ctx) => {
-      ctx.ui.notify(statusText(ctx), lastSync.ok ? "info" : "warning");
+      const auth = ctx.modelRegistry.getProviderAuthStatus("openrouter");
+      ctx.ui.notify(statusText(auth), lastSync.ok && !isAuthMissing(auth) ? "info" : "warning");
     },
   });
 
@@ -195,19 +196,23 @@ function errorMessage(error: unknown): string {
       : String(error);
 }
 
-function statusText(ctx: ExtensionCommandContext): string {
-  const auth = ctx.modelRegistry.getProviderAuthStatus("openrouter");
+function statusText(auth: AuthStatus): string {
   return [
     `OpenRouter models: ${registeredCount}`,
     `cache age: ${lastGood ? formatAge(Date.now() - lastGood.fetchedAt) : "none"}`,
     `last sync: ${lastSync.message}${lastSync.at ? ` (${formatAge(Date.now() - lastSync.at)} ago)` : ""}`,
     `auth: ${authStatus(auth)}`,
+    ...(isAuthMissing(auth) ? ["warning: picker still lists models; requests need OPENROUTER_API_KEY or /login openrouter"] : []),
   ].join("\n");
 }
 
 function authStatus(auth: AuthStatus): string {
-  if (!auth.configured || (auth.source === "models_json_key" && !process.env.OPENROUTER_API_KEY)) return "missing";
+  if (isAuthMissing(auth)) return "missing";
   return `${auth.source ?? "configured"}${auth.label ? ` (${auth.label})` : ""}`;
+}
+
+function isAuthMissing(auth: AuthStatus): boolean {
+  return !auth.configured || (auth.source === "models_json_key" && !process.env.OPENROUTER_API_KEY);
 }
 
 function formatAge(ms: number): string {
