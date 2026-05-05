@@ -202,7 +202,7 @@ function statusText(auth: AuthStatus): string {
     `cache age: ${lastGood ? formatAge(Date.now() - lastGood.fetchedAt) : "none"}`,
     `last sync: ${lastSync.message}${lastSync.at ? ` (${formatAge(Date.now() - lastSync.at)} ago)` : ""}`,
     `auth: ${authStatus(auth)}`,
-    ...(isAuthMissing(auth) ? ["warning: picker still lists models; requests need OPENROUTER_API_KEY or /login openrouter"] : []),
+    ...(isAuthMissing(auth) ? ["warning: picker still lists models; requests need OPENROUTER_API_KEY or stored OpenRouter auth"] : []),
   ].join("\n");
 }
 
